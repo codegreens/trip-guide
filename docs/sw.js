@@ -1,14 +1,18 @@
-/* Service worker — smoke test.
-   Precaches the whole site on install so airplane mode works.
-   Bump CACHE when files change, or phones keep serving the old copy. */
+/* Service worker — trip guide.
+   Precaches the app shell AND the encrypted payload, so the whole thing works
+   in airplane mode after one successful online load.
 
-const CACHE = 'trip-guide-smoke-v1';
+   CACHE is bumped automatically by Tools/trip-guide-publish.py on every publish.
+   Without that bump, phones keep serving the old guide.enc from cache forever. */
+
+const CACHE = 'trip-guide-v1';
 
 /* sw.js is deliberately NOT in this list. The browser manages the worker script
-   itself, and precaching it can strand a phone on an old worker forever. */
+   itself, and precaching it can strand a phone on an old worker. */
 const ASSETS = [
   './',
   'index.html',
+  'guide.enc',
   'manifest.webmanifest',
   'apple-touch-icon.png',
   'icon-192.png',
@@ -32,10 +36,32 @@ self.addEventListener('activate', e => {
   );
 });
 
-/* Cache first. The whole point is that the network is optional.
-   Falls back to index.html for navigations so a deep link still opens offline. */
+/* guide.enc: network first, so a phone that is online picks up a new publish
+   immediately instead of waiting for the cache to expire. Falls back to cache
+   the moment the network is unavailable, which is the normal case abroad.
+
+   Everything else: cache first. The network is optional by design. */
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
+  const url = new URL(e.request.url);
+  const isPayload = url.pathname.endsWith('/guide.enc');
+
+  if (isPayload){
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          if (res && res.status === 200){
+            const copy = res.clone();
+            caches.open(CACHE).then(c => c.put(e.request, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(e.request).then(hit =>
+          hit || new Response('', {status:504, statusText:'Offline and not cached'})))
+    );
+    return;
+  }
+
   e.respondWith(
     caches.match(e.request).then(hit => {
       if (hit) return hit;
@@ -49,7 +75,7 @@ self.addEventListener('fetch', e => {
         })
         .catch(() => {
           if (e.request.mode === 'navigate') return caches.match('index.html');
-          return new Response('', {status: 504, statusText: 'Offline'});
+          return new Response('', {status:504, statusText:'Offline'});
         });
     })
   );

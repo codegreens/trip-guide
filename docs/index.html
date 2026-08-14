@@ -7,152 +7,766 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Trip Guide">
 <meta name="theme-color" content="#111827">
+<meta name="robots" content="noindex, nofollow">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
-<title>Smoke Test — Trip Guide</title>
+<title>Trip Guide</title>
 <!--
-  SMOKE TEST. Not the real guide.
-  Proves four things before we build on this stack:
-    1. GitHub Pages is publishing
-    2. iOS Safari executes JavaScript (Quick Look in Files does not)
-    3. Add to Home Screen produces a standalone app
-    4. The service worker caches everything, so airplane mode works
-  Every asset is local. No CDN, no fonts, no network calls.
+  Encrypted offline trip guide.
+
+  The repository is public. Everything of substance lives in guide.enc, which is
+  AES-256-GCM ciphertext. This file is a reader: it fetches the blob, derives a
+  key from a passphrase you type, decrypts in the browser, and renders. No trip
+  data is in this HTML and nothing is ever sent anywhere.
+
+  Format of guide.enc, written by Tools/trip-guide-publish.py:
+      "TGE1" (4) | salt (16) | iv (12) | AES-256-GCM ciphertext+tag
+      key = PBKDF2-HMAC-SHA256(passphrase, salt, 600000, 32)
+
+  After the first unlock the master key is wrapped with a PIN-derived key and
+  kept in localStorage on that device only. The PIN protects the phone. The
+  passphrase protects the payload. They are not the same control.
+
+  No external resources of any kind.
 -->
 <style>
 :root{
-  --bg:#f6f7f9; --card:#fff; --ink:#111827; --muted:#6b7280; --line:#e5e7eb;
-  --ok:#15803d; --okbg:#f0fdf4; --okline:#bbf7d0;
-  --no:#b91c1c; --nobg:#fef2f2; --noline:#fecaca;
-  --wait:#92400e; --waitbg:#fffbeb; --waitline:#fde68a;
-  --accent:#0f766e;
+  --bg:#f6f7f9; --card:#ffffff; --ink:#111827; --muted:#6b7280; --line:#e5e7eb;
+  --accent:#0f766e; --warn-bg:#fffbeb; --warn-line:#fde68a; --warn-ink:#92400e;
+  --money-bg:#f0fdf4; --money-line:#bbf7d0; --money-ink:#166534;
+  --book-bg:#eff6ff; --book-line:#bfdbfe; --book-ink:#1e40af;
+  --bad:#b91c1c; --bad-bg:#fef2f2; --bad-line:#fecaca;
+  --travel:#0284c7; --food:#dc2626; --culture:#7c3aed; --event:#db2777; --free:#65a30d;
+  --shadow:0 1px 2px rgba(0,0,0,.06),0 1px 8px rgba(0,0,0,.04);
 }
-@media (prefers-color-scheme:dark){
+@media (prefers-color-scheme: dark){
   :root{
     --bg:#0b0f14; --card:#151b23; --ink:#e8eaed; --muted:#9aa4b2; --line:#252d38;
-    --ok:#86efac; --okbg:#0f2419; --okline:#1f4a33;
-    --no:#fca5a5; --nobg:#2a1414; --noline:#5a2020;
-    --wait:#fcd34d; --waitbg:#2a2113; --waitline:#5a4520;
-    --accent:#5eead4;
+    --accent:#5eead4; --warn-bg:#2a2113; --warn-line:#5a4520; --warn-ink:#fcd34d;
+    --money-bg:#0f2419; --money-line:#1f4a33; --money-ink:#86efac;
+    --book-bg:#111f36; --book-line:#1e3a63; --book-ink:#93c5fd;
+    --bad:#fca5a5; --bad-bg:#2a1414; --bad-line:#5a2020;
+    --travel:#38bdf8; --food:#f87171; --culture:#c4b5fd; --event:#f9a8d4; --free:#a3e635;
+    --shadow:none;
   }
 }
-*{box-sizing:border-box}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0}
 body{
-  margin:0;background:var(--bg);color:var(--ink);
-  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-  padding:calc(20px + env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom));
-  max-width:640px;margin:0 auto;-webkit-text-size-adjust:100%;
+  background:var(--bg);color:var(--ink);
+  font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  -webkit-text-size-adjust:100%;
 }
-h1{font-size:19px;letter-spacing:-.02em;margin:0 0 4px}
-.lede{color:var(--muted);font-size:13px;margin:0 0 20px}
-.check{
-  background:var(--card);border:1px solid var(--line);border-radius:12px;
-  padding:12px 14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start;
+a{color:var(--accent);text-decoration:none}
+a:active{opacity:.6}
+.hide{display:none !important}
+
+/* ================= LOCK SCREEN ================= */
+#lock{
+  min-height:100vh;min-height:100dvh;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;padding:24px 22px;
+  padding-top:calc(24px + env(safe-area-inset-top));
 }
+.lockbox{width:100%;max-width:340px;text-align:center}
 .mark{
-  flex:none;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;
-  justify-content:center;font-size:15px;font-weight:700;border:1px solid;
+  width:56px;height:56px;margin:0 auto 18px;border-radius:16px;background:var(--ink);
+  display:flex;align-items:center;justify-content:center;
 }
-.mark.ok{background:var(--okbg);border-color:var(--okline);color:var(--ok)}
-.mark.no{background:var(--nobg);border-color:var(--noline);color:var(--no)}
-.mark.wait{background:var(--waitbg);border-color:var(--waitline);color:var(--wait)}
-.body b{display:block;font-size:14px}
-.body span{display:block;font-size:12.5px;color:var(--muted);margin-top:2px}
-.note{
-  background:var(--waitbg);border:1px solid var(--waitline);color:var(--wait);
-  border-radius:10px;padding:12px 14px;font-size:13px;margin:18px 0 0;line-height:1.5;
+.mark svg{width:30px;height:30px}
+#lock h1{font-size:19px;letter-spacing:-.02em;margin:0 0 5px}
+#lock .sub{font-size:13px;color:var(--muted);margin:0 0 22px;line-height:1.5}
+#lock input{
+  width:100%;padding:13px 14px;font:inherit;font-size:16px;text-align:center;
+  border:1px solid var(--line);border-radius:11px;background:var(--card);color:var(--ink);
 }
-.note b{display:block;margin-bottom:4px}
-.note ol{margin:6px 0 0;padding-left:20px}
-.note li{margin:4px 0}
-footer{margin-top:24px;font-size:11.5px;color:var(--muted);line-height:1.6;text-align:center}
-code{
-  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
-  background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px 5px;
+#lock input:focus{outline:none;border-color:var(--accent)}
+#lock button.go{
+  width:100%;margin-top:10px;padding:13px;font:inherit;font-size:15px;font-weight:700;
+  border:0;border-radius:11px;background:var(--accent);color:var(--bg);cursor:pointer;
 }
+#lock button.go:disabled{opacity:.45}
+.linkbtn{
+  background:none;border:0;font:inherit;font-size:12.5px;color:var(--muted);
+  margin-top:16px;cursor:pointer;text-decoration:underline;padding:6px;
+}
+.msg{font-size:13px;margin-top:12px;min-height:19px;line-height:1.45}
+.msg.err{color:var(--bad)}
+.msg.ok{color:var(--money-ink)}
+
+/* PIN pad */
+#pinpad{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin-top:20px}
+#pinpad button{
+  font:inherit;font-size:23px;font-weight:500;padding:15px 0;border-radius:12px;
+  border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;
+}
+#pinpad button:active{background:var(--bg)}
+#pinpad button.wide{grid-column:span 1;font-size:13px;font-weight:600;color:var(--muted)}
+.dots{display:flex;gap:13px;justify-content:center;margin:20px 0 4px;min-height:15px}
+.dots i{
+  width:13px;height:13px;border-radius:50%;border:1.5px solid var(--muted);
+  display:block;transition:.12s;
+}
+.dots i.on{background:var(--accent);border-color:var(--accent);transform:scale(1.1)}
+.shake{animation:sh .35s}
+@keyframes sh{0%,100%{transform:translateX(0)}20%,60%{transform:translateX(-7px)}40%,80%{transform:translateX(7px)}}
+
+/* ================= APP ================= */
+#app{padding-bottom:calc(64px + env(safe-area-inset-bottom))}
+header{
+  position:sticky;top:0;z-index:50;background:var(--card);
+  border-bottom:1px solid var(--line);
+  padding:calc(10px + env(safe-area-inset-top)) 14px 10px;
+}
+.htop{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+h1.apptitle{margin:0;font-size:16px;letter-spacing:-.02em}
+#clock{font-size:11.5px;color:var(--muted);font-variant-numeric:tabular-nums;text-align:right;flex:none}
+#search{
+  width:100%;margin-top:9px;padding:9px 12px;font:inherit;font-size:15px;
+  border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);
+}
+#search::placeholder{color:var(--muted)}
+nav{
+  position:fixed;left:0;right:0;bottom:0;z-index:60;display:flex;
+  background:var(--card);border-top:1px solid var(--line);
+  padding-bottom:env(safe-area-inset-bottom);
+}
+nav button{
+  flex:1;font:inherit;font-size:10.5px;font-weight:600;letter-spacing:.02em;
+  padding:9px 2px 8px;border:0;background:none;color:var(--muted);cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;gap:3px;
+}
+nav button .g{font-size:17px;line-height:1}
+nav button.on{color:var(--accent)}
+main{padding:14px 12px 28px;max-width:760px;margin:0 auto}
+.pane{display:none}
+.pane.on{display:block}
+h2.sec{
+  font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);
+  margin:22px 2px 8px;font-weight:700;
+}
+h2.sec:first-child{margin-top:2px}
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:12px 13px;margin-bottom:10px;box-shadow:var(--shadow);
+}
+.card h3{margin:0 0 2px;font-size:14.5px;letter-spacing:-.01em}
+.card .sub{font-size:12px;color:var(--muted);margin:0 0 8px}
+.card p{margin:0 0 7px}
+.card p:last-child{margin-bottom:0}
+.day{margin-bottom:12px}
+.dayhead{display:flex;align-items:center;gap:9px;padding:11px 13px;cursor:pointer;user-select:none}
+.dnum{flex:none;width:40px;text-align:center;line-height:1.15}
+.dnum b{display:block;font-size:15px;letter-spacing:-.02em}
+.dnum span{display:block;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
+.dmeta{flex:1;min-width:0}
+.dmeta b{display:block;font-size:14px;letter-spacing:-.01em}
+.dmeta span{display:block;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chev{flex:none;color:var(--muted);font-size:11px;transition:transform .16s}
+.day.open .chev{transform:rotate(90deg)}
+.daybody{display:none;padding:2px 13px 12px}
+.day.open .daybody{display:block}
+.day.today{border-color:var(--accent);border-width:2px}
+.tl{list-style:none;margin:0;padding:0}
+.tl li{display:flex;gap:10px;padding:8px 0;border-top:1px solid var(--line)}
+.tl li:first-child{border-top:0;padding-top:2px}
+.tm{flex:none;width:66px;font-size:11.5px;font-variant-numeric:tabular-nums;color:var(--muted);font-weight:600;padding-top:1px}
+.tx{flex:1;min-width:0}
+.tx b{font-size:13.5px;font-weight:600;display:block}
+.tx .n{font-size:12px;color:var(--muted);margin-top:2px;display:block}
+.dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
+.flag{border-radius:8px;padding:8px 10px;font-size:12px;line-height:1.45;margin:8px 0 0;border:1px solid}
+.flag b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;margin-bottom:2px}
+.flag.warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-ink)}
+.flag.money{background:var(--money-bg);border-color:var(--money-line);color:var(--money-ink)}
+.flag.book{background:var(--book-bg);border-color:var(--book-line);color:var(--book-ink)}
+.kv{margin:0;font-size:13px}
+.kv div{display:flex;gap:10px;padding:5px 0;border-top:1px solid var(--line)}
+.kv div:first-child{border-top:0}
+.kv dt{flex:none;width:96px;color:var(--muted);font-size:12px}
+.kv dd{margin:0;flex:1;min-width:0;word-break:break-word}
+.mono{font-variant-numeric:tabular-nums;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;letter-spacing:-.01em}
+.big{font-size:16px;font-weight:700;letter-spacing:.01em}
+.pill{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;
+  padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--muted);margin-left:6px}
+.pill.ok{color:var(--money-ink);border-color:var(--money-line);background:var(--money-bg)}
+.pill.no{color:var(--warn-ink);border-color:var(--warn-line);background:var(--warn-bg)}
+ul.plain{margin:6px 0 0;padding-left:18px;font-size:13px}
+ul.plain li{margin:3px 0}
+.calc{display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap}
+.calc input,.calc select{font:inherit;font-size:15px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:9px;background:var(--bg);color:var(--ink)}
+.calc input{width:110px}
+#calcout{font-size:15px;font-weight:700;margin-left:2px}
+.empty{text-align:center;color:var(--muted);font-size:13px;padding:30px 10px}
+.foot{font-size:11px;color:var(--muted);text-align:center;padding:18px 10px 4px;line-height:1.6}
+mark{background:#fde68a;color:#111827;border-radius:2px;padding:0 1px}
+.tapnote{font-size:11px;color:var(--muted);margin:0 2px 10px}
 </style>
 </head>
 <body>
 
-<h1>Smoke test</h1>
-<p class="lede">If all four are green, the stack works and I can build the real guide on it.</p>
+<!-- ================= LOCK ================= -->
+<div id="lock">
+  <div class="lockbox">
+    <div class="mark">
+      <svg viewBox="0 0 24 24" fill="none" stroke="#5eead4" stroke-width="2" stroke-linecap="round">
+        <rect x="4" y="10.5" width="16" height="10" rx="2.5"/>
+        <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/>
+      </svg>
+    </div>
+    <h1 id="lockTitle">Trip Guide</h1>
+    <p class="sub" id="lockSub">Enter your passphrase to unlock this device.</p>
 
-<div id="checks"></div>
+    <div id="passWrap">
+      <input id="pass" type="password" placeholder="Passphrase" autocomplete="current-password"
+             autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go">
+      <button class="go" id="passGo">Unlock</button>
+    </div>
 
-<div class="note">
-  <b>Run these in order</b>
-  <ol>
-    <li>Open this page in <b>Safari on your iPhone</b>. Checks 1 and 2 should go green immediately.</li>
-    <li>Wait for check 4 to go green. It takes a second or two on first load.</li>
-    <li>Tap Share, then <b>Add to Home Screen</b>. Open it from the icon. Check 3 turns green.</li>
-    <li>Turn on <b>Airplane Mode</b>, then open the icon again. If the page still loads, offline works.</li>
-    <li>Send the link to Margaret and have her do the same.</li>
-  </ol>
+    <div id="pinWrap" class="hide">
+      <div class="dots" id="dots"></div>
+      <div id="pinpad"></div>
+    </div>
+
+    <div class="msg" id="msg"></div>
+    <button class="linkbtn hide" id="usePass">Use passphrase instead</button>
+  </div>
 </div>
 
-<footer>
-  Smoke test only. No trip data on this page.<br>
-  <span id="build"></span>
-</footer>
+<!-- ================= APP ================= -->
+<div id="app" class="hide">
+  <header>
+    <div class="htop">
+      <h1 class="apptitle" id="appTitle">Trip Guide</h1>
+      <div id="clock">—</div>
+    </div>
+    <input id="search" type="search" placeholder="Search everything" autocomplete="off" autocorrect="off" spellcheck="false">
+  </header>
+  <main>
+    <div class="pane on" id="pane-now"></div>
+    <div class="pane" id="pane-days"></div>
+    <div class="pane" id="pane-docs"></div>
+    <div class="pane" id="pane-info"></div>
+    <div class="pane" id="pane-search"></div>
+    <div class="foot">
+      Decrypted on this device. Nothing here needs a signal.<br>
+      <button class="linkbtn" id="lockBtn" style="margin-top:6px">Lock</button>
+      <button class="linkbtn" id="forgetBtn" style="margin-top:6px">Forget this device</button>
+    </div>
+  </main>
+  <nav>
+    <button data-p="now" class="on"><span class="g">◉</span>Now</button>
+    <button data-p="days"><span class="g">▤</span>Days</button>
+    <button data-p="docs"><span class="g">✦</span>Bookings</button>
+    <button data-p="info"><span class="g">✚</span>Info</button>
+  </nav>
+</div>
 
 <script>
-const CHECKS = [
-  {id:'js',   t:'JavaScript runs',        s:'This page rendered from script, so Safari is executing it. Files.app could not.'},
-  {id:'https',t:'Served over HTTPS',      s:'Required for service workers. GitHub Pages does this automatically.'},
-  {id:'pwa',  t:'Running from Home Screen', s:'Turns green only when opened from the icon, not from Safari.'},
-  {id:'sw',   t:'Service worker cached the page', s:'This is what makes airplane mode work.'}
-];
+'use strict';
 
-const state = {js:'ok', https:'wait', pwa:'wait', sw:'wait'};
+/* ============================================================
+   CRYPTO
+   ============================================================ */
+const ITER_PASS = 600000;   // passphrase -> master key
+const ITER_PIN  = 300000;   // PIN -> wrapping key
+const STORE_KEY = 'tripguide.device.v1';
+const MAX_FAILS = 10;
 
-function draw(){
-  document.getElementById('checks').innerHTML = CHECKS.map((c,i) => {
-    const st = state[c.id];
-    const glyph = st === 'ok' ? '✓' : st === 'no' ? '✕' : '…';
-    return `<div class="check">
-      <div class="mark ${st}">${glyph}</div>
-      <div class="body"><b>${i+1}. ${c.t}</b><span>${c.s}</span></div>
+const enc = new TextEncoder(), dec = new TextDecoder();
+const b64 = u8 => btoa(String.fromCharCode(...u8));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+
+async function deriveKey(secret, salt, iterations, extractable){
+  const base = await crypto.subtle.importKey('raw', enc.encode(secret), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    {name:'PBKDF2', salt, iterations, hash:'SHA-256'},
+    base, {name:'AES-GCM', length:256}, extractable, ['encrypt','decrypt']);
+}
+
+/* Fetch the encrypted payload. Cached by the service worker, so this
+   succeeds offline after the first successful load. */
+let BLOB = null;
+async function getBlob(){
+  if (BLOB) return BLOB;
+  const res = await fetch('guide.enc', {cache:'no-cache'});
+  if (!res.ok) throw new Error('Cannot load guide.enc (' + res.status + ')');
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (dec.decode(buf.slice(0,4)) !== 'TGE1') throw new Error('guide.enc is not in the expected format');
+  BLOB = {salt: buf.slice(4,20), iv: buf.slice(20,32), ct: buf.slice(32)};
+  return BLOB;
+}
+
+async function decryptWith(key){
+  const {iv, ct} = await getBlob();
+  const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ct);
+  return JSON.parse(dec.decode(pt));
+}
+
+/* ---- device store: master key wrapped by a PIN-derived key ---- */
+const store = {
+  read(){ try { return JSON.parse(localStorage.getItem(STORE_KEY)); } catch { return null; } },
+  write(o){ try { localStorage.setItem(STORE_KEY, JSON.stringify(o)); } catch {} },
+  clear(){ try { localStorage.removeItem(STORE_KEY); } catch {} }
+};
+
+async function rememberDevice(masterKey, pin){
+  const raw   = new Uint8Array(await crypto.subtle.exportKey('raw', masterKey));
+  const dSalt = crypto.getRandomValues(new Uint8Array(16));
+  const wIv   = crypto.getRandomValues(new Uint8Array(12));
+  const wKey  = await deriveKey(pin, dSalt, ITER_PIN, false);
+  const wrapped = new Uint8Array(await crypto.subtle.encrypt({name:'AES-GCM', iv:wIv}, wKey, raw));
+  store.write({v:1, salt:b64(dSalt), iv:b64(wIv), key:b64(wrapped), len:pin.length, fails:0});
+}
+
+async function unwrapWithPin(pin){
+  const d = store.read();
+  if (!d) throw new Error('no device record');
+  const wKey = await deriveKey(pin, unb64(d.salt), ITER_PIN, false);
+  const raw = await crypto.subtle.decrypt({name:'AES-GCM', iv:unb64(d.iv)}, wKey, unb64(d.key));
+  return crypto.subtle.importKey('raw', raw, {name:'AES-GCM', length:256}, true, ['encrypt','decrypt']);
+}
+
+/* ============================================================
+   LOCK SCREEN
+   ============================================================ */
+const $ = s => document.querySelector(s);
+const msg = (t, cls) => { const m = $('#msg'); m.textContent = t || ''; m.className = 'msg' + (cls ? ' ' + cls : ''); };
+
+let PENDING_KEY = null;   // master key held only between unlock and PIN setup
+let MODE = 'pass';        // pass | pin | setpin
+let PIN = '';
+let PIN_LEN = 4;
+
+function showPass(sub){
+  MODE = 'pass';
+  $('#passWrap').classList.remove('hide');
+  $('#pinWrap').classList.add('hide');
+  $('#usePass').classList.add('hide');
+  $('#lockSub').textContent = sub || 'Enter your passphrase to unlock this device.';
+  $('#pass').value = '';
+  setTimeout(() => $('#pass').focus(), 60);
+}
+
+function showPin(mode, sub){
+  MODE = mode;
+  PIN = '';
+  $('#passWrap').classList.add('hide');
+  $('#pinWrap').classList.remove('hide');
+  $('#usePass').classList.toggle('hide', mode === 'setpin');
+  $('#lockSub').textContent = sub;
+  drawDots(); drawPad();
+}
+
+function drawDots(){
+  $('#dots').innerHTML = Array.from({length: PIN_LEN},
+    (_, i) => `<i class="${i < PIN.length ? 'on' : ''}"></i>`).join('');
+}
+
+function drawPad(){
+  const keys = ['1','2','3','4','5','6','7','8','9','', '0','⌫'];
+  $('#pinpad').innerHTML = keys.map(k =>
+    k === '' ? '<button style="visibility:hidden"></button>'
+             : `<button data-k="${k}"${k === '⌫' ? ' class="wide"' : ''}>${k}</button>`).join('');
+  $('#pinpad').querySelectorAll('button[data-k]').forEach(b => {
+    b.addEventListener('click', () => tapPin(b.dataset.k));
+  });
+}
+
+async function tapPin(k){
+  if (k === '⌫'){ PIN = PIN.slice(0, -1); drawDots(); msg(''); return; }
+  if (PIN.length >= PIN_LEN) return;
+  PIN += k; drawDots();
+  if (PIN.length < PIN_LEN) return;
+
+  if (MODE === 'setpin'){
+    await rememberDevice(PENDING_KEY, PIN);
+    PENDING_KEY = null;
+    msg('Saved. This device will ask for the PIN from now on.', 'ok');
+    setTimeout(boot, 500);
+    return;
+  }
+
+  msg('Checking…');
+  try {
+    const key = await unwrapWithPin(PIN);
+    const d = store.read(); d.fails = 0; store.write(d);
+    const data = await decryptWith(key);
+    launch(data);
+  } catch {
+    const d = store.read() || {};
+    d.fails = (d.fails || 0) + 1;
+    store.write(d);
+    PIN = ''; drawDots();
+    $('.lockbox').classList.add('shake');
+    setTimeout(() => $('.lockbox').classList.remove('shake'), 400);
+    if (d.fails >= MAX_FAILS){
+      store.clear();
+      msg('Too many attempts. This device has been reset, enter the passphrase.', 'err');
+      setTimeout(() => showPass('Device reset. Enter your passphrase.'), 1400);
+    } else {
+      msg(`Wrong PIN. ${MAX_FAILS - d.fails} attempt${MAX_FAILS - d.fails === 1 ? '' : 's'} left.`, 'err');
+    }
+  }
+}
+
+async function submitPass(){
+  const p = $('#pass').value;
+  if (!p) return;
+  $('#passGo').disabled = true;
+  msg('Unlocking…');
+  try {
+    const {salt} = await getBlob();
+    const key = await deriveKey(p, salt, ITER_PASS, true);
+    const data = await decryptWith(key);
+    $('#pass').value = '';
+    if (!store.read()){
+      PENDING_KEY = key;
+      msg('');
+      askPinLength();
+    } else {
+      launch(data);
+    }
+  } catch (e){
+    msg(/format|load/.test(e.message) ? e.message : 'That passphrase did not work.', 'err');
+  } finally {
+    $('#passGo').disabled = false;
+  }
+}
+
+function askPinLength(){
+  $('#passWrap').classList.add('hide');
+  $('#pinWrap').classList.add('hide');
+  $('#lockSub').innerHTML =
+    'Unlocked. Set a PIN for this device so you do not retype the passphrase.<br>' +
+    '<span style="font-size:12px">6 digits is meaningfully harder to brute force than 4 if the phone is taken. Either is fine.</span>';
+  const box = document.createElement('div');
+  box.id = 'lenPick';
+  box.innerHTML = [4,6,8].map(n =>
+    `<button class="go" data-n="${n}" style="margin-top:8px">${n}-digit PIN</button>`).join('');
+  $('#msg').before(box);
+  box.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+    PIN_LEN = +b.dataset.n;
+    box.remove();
+    showPin('setpin', `Choose a ${PIN_LEN}-digit PIN.`);
+  }));
+}
+
+function boot(){
+  const d = store.read();
+  if (d && d.key){
+    PIN_LEN = d.len || 4;
+    showPin('pin', 'Enter your PIN.');
+  } else {
+    showPass();
+  }
+}
+
+$('#passGo').addEventListener('click', submitPass);
+$('#pass').addEventListener('keydown', e => { if (e.key === 'Enter') submitPass(); });
+$('#usePass').addEventListener('click', () => showPass('Enter your passphrase.'));
+
+/* ============================================================
+   APP
+   ============================================================ */
+let D = null;
+const CAT = {travel:'var(--travel)', food:'var(--food)', culture:'var(--culture)',
+             event:'var(--event)', free:'var(--free)', base:'var(--muted)'};
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const tel = n => n ? `<a href="tel:${n.replace(/[^+\d]/g,'')}">${esc(n)}</a>` : '';
+
+function launch(data){
+  D = data;
+  $('#lock').classList.add('hide');
+  $('#app').classList.remove('hide');
+  if (D.meta && D.meta.title) $('#appTitle').textContent = D.meta.title;
+  $('#search').placeholder = 'Search everything (hotel, flight, ¥…)';
+  renderNow(); renderDays(); renderDocs(); renderInfo();
+  tickClock(); setInterval(tickClock, 30000);
+}
+
+const flagHTML = f => `<div class="flag ${f.k}"><b>${esc(f.t)}</b>${esc(f.b)}</div>`;
+
+function dayHTML(d, i){
+  const items = d.items.map(it => `
+    <li>
+      <div class="tm">${esc(it.t)}</div>
+      <div class="tx">
+        <b><span class="dot" style="background:${CAT[it.c]||'var(--muted)'}"></span>${esc(it.h)}</b>
+        ${it.n ? `<span class="n">${esc(it.n)}</span>` : ''}
+      </div>
+    </li>`).join('');
+  return `
+  <div class="card day" data-i="${i}" data-date="${d.date}">
+    <div class="dayhead">
+      <div class="dnum"><b>${esc(d.dnum)}</b><span>${esc(d.mon)} ${esc(d.dow)}</span></div>
+      <div class="dmeta"><b>${esc(d.title)}</b><span>${esc(d.sum)}</span></div>
+      <div class="chev">▶</div>
+    </div>
+    <div class="daybody">
+      <ul class="tl">${items}</ul>
+      ${(d.flags||[]).map(flagHTML).join('')}
+    </div>
+  </div>`;
+}
+
+function wireDays(root){
+  root.querySelectorAll('.dayhead').forEach(h =>
+    h.addEventListener('click', () => h.parentElement.classList.toggle('open')));
+}
+
+function renderDays(){
+  $('#pane-days').innerHTML =
+    `<p class="tapnote">Tap a day to expand. ${D.DAYS.length} days, ${D.DAYS[0].mon} ${D.DAYS[0].dnum} to ${D.DAYS[D.DAYS.length-1].mon} ${D.DAYS[D.DAYS.length-1].dnum}.</p>` +
+    D.DAYS.map(dayHTML).join('');
+  wireDays($('#pane-days'));
+}
+
+function sleepCard(today){
+  /* Uses explicit from/to on each hotel. Half-open range: the checkout date is
+     not a night you sleep there. */
+  const h = D.HOTELS.find(x => x.from && today >= x.from && today < x.to);
+  if (!h) return `<div class="card"><h3>No hotel tonight</h3><p class="sub">Either you are in the air, or you are home.</p></div>`;
+  return `<div class="card">
+    <h3>${esc(h.name)}</h3>
+    <p class="sub">${esc(h.city)} · ${esc(h.dates)}</p>
+    <dl class="kv">
+      <div><dt>Address</dt><dd>${esc(h.addr)}</dd></div>
+      ${h.tel ? `<div><dt>Phone</dt><dd>${tel(h.tel)}</dd></div>` : ''}
+      ${h.kv.slice(0,2).map(([k,v]) => `<div><dt>${esc(k)}</dt><dd class="mono">${esc(v)}</dd></div>`).join('')}
+    </dl>
+  </div>`;
+}
+
+function renderNow(){
+  const now = new Date();
+  const today = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0')+'-'+String(now.getDate()).padStart(2,'0');
+  const idx = D.DAYS.findIndex(d => d.date === today);
+  const upcoming = D.DAYS.findIndex(d => d.date >= today);
+  let html = '';
+
+  if (idx === -1){
+    const start = new Date(D.meta.start + 'T00:00:00');
+    const end   = new Date(D.meta.end + 'T23:59:59');
+    if (now < start){
+      const days = Math.ceil((start - new Date(now.getFullYear(),now.getMonth(),now.getDate()))/86400000);
+      html += `<div class="card"><h3>Not yet</h3><p class="sub">Trip starts ${esc(D.DAYS[0].mon)} ${esc(D.DAYS[0].dnum)}.</p>
+        <p class="big">${days} day${days===1?'':'s'} to go</p></div>`;
+    } else if (now > end){
+      html += `<div class="card"><h3>Home</h3><p class="sub">Kept for the record.</p></div>`;
+    }
+  }
+
+  const showIdx = idx !== -1 ? idx : (upcoming !== -1 ? upcoming : -1);
+  if (showIdx !== -1){
+    html += `<h2 class="sec">${idx !== -1 ? 'Today' : 'First day'}</h2>` +
+            dayHTML(D.DAYS[showIdx], showIdx).replace('class="card day"','class="card day open today"');
+    if (D.DAYS[showIdx+1]) html += `<h2 class="sec">Tomorrow</h2>` + dayHTML(D.DAYS[showIdx+1], showIdx+1);
+  }
+
+  html += `<h2 class="sec">Where you sleep tonight</h2>` + sleepCard(today);
+  html += `<h2 class="sec">Emergency, fastest path</h2><div class="card"><dl class="kv">` +
+    D.EMERGENCY.filter(g => g.country !== 'Anywhere').map(g =>
+      `<div><dt>${esc(g.country.split(' ')[0])}</dt><dd>` +
+      g.rows.filter(r => /police|ambulance|general|fire/i.test(r[0]))
+            .map(r => `${tel(r[1])} ${esc(r[0].toLowerCase())}`).join(' · ') +
+      `</dd></div>`).join('') +
+    `</dl><p class="sub" style="margin:8px 0 0">Full list, including consulates, under Info.</p></div>`;
+
+  $('#pane-now').innerHTML = html;
+  wireDays($('#pane-now'));
+}
+
+function renderDocs(){
+  let html = `<h2 class="sec">Flights</h2>`;
+  D.FLIGHTS.forEach(f => {
+    html += `<div class="card">
+      <h3>${esc(f.name)}</h3>
+      <p class="sub">${esc(f.airline)} · issued ${esc(f.issued)}</p>
+      <dl class="kv">
+        <div><dt>Booking ref</dt><dd class="mono big">${esc(f.ref)}</dd></div>
+        ${f.legs.map(l => `<div><dt>Segment</dt><dd>${esc(l)}</dd></div>`).join('')}
+        ${f.pax.map(p => `<div><dt>${esc(p[0].split(' ')[0])}</dt><dd class="mono">${esc(p[1])} · seats ${esc(p[2])}</dd></div>`).join('')}
+        <div><dt>Total paid</dt><dd><b>${esc(f.paid)}</b></dd></div>
+      </dl>
+      <ul class="plain">${f.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>
     </div>`;
-  }).join('');
+  });
+
+  html += `<h2 class="sec">Hotels</h2>`;
+  D.HOTELS.forEach(h => {
+    const pill = h.status === 'Booked' ? 'ok' : (h.status.indexOf('unpaid') > -1 ? 'no' : '');
+    html += `<div class="card">
+      <h3>${esc(h.name)}<span class="pill ${pill}">${esc(h.status)}</span></h3>
+      <p class="sub">${esc(h.city)} · ${esc(h.dates)}</p>
+      <dl class="kv">
+        <div><dt>Address</dt><dd>${esc(h.addr)}</dd></div>
+        ${h.tel ? `<div><dt>Phone</dt><dd>${tel(h.tel)}</dd></div>` : ''}
+        ${h.kv.map(([k,v]) => `<div><dt>${esc(k)}</dt><dd class="mono">${esc(v)}</dd></div>`).join('')}
+      </dl>
+      ${h.notes.length ? `<ul class="plain">${h.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    </div>`;
+  });
+
+  html += `<h2 class="sec">Experiences & other</h2>`;
+  D.EXPERIENCES.forEach(e => {
+    html += `<div class="card">
+      <h3>${esc(e.name)}<span class="pill ${e.status.indexOf('UNPAID') > -1 ? 'no' : 'ok'}">${esc(e.status)}</span></h3>
+      <p class="sub">${esc(e.when)}</p>
+      <dl class="kv">${e.kv.map(([k,v]) => `<div><dt>${esc(k)}</dt><dd class="mono">${esc(v)}</dd></div>`).join('')}</dl>
+      ${e.notes.length ? `<ul class="plain">${e.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    </div>`;
+  });
+
+  html += `<h2 class="sec">Wedding schedule</h2><div class="card"><dl class="kv">` +
+    D.WEDDING.map(w => `<div><dt>${esc(w[1].split(',')[0])}</dt><dd><b>${esc(w[0])}</b><br>
+      <span style="color:var(--muted);font-size:12px">${esc(w[1])} · ${esc(w[2])}<br>Dress: ${esc(w[3])}</span></dd></div>`).join('') +
+    `</dl><ul class="plain"><li>Buses to the welcome party leave USV at 4:45 PM on Aug 28.</li></ul></div>`;
+
+  $('#pane-docs').innerHTML = html;
 }
 
-// 2. HTTPS
-state.https = (location.protocol === 'https:') ? 'ok' : 'no';
-if (location.protocol === 'file:'){
-  CHECKS[1].s = 'Opened as a local file. Upload to GitHub Pages and open the https:// URL instead.';
+function renderInfo(){
+  let html = `<h2 class="sec">Emergency numbers</h2>`;
+  D.EMERGENCY.forEach(g => {
+    html += `<div class="card"><h3>${esc(g.country)}</h3><dl class="kv">` +
+      g.rows.map(r => `<div><dt>${esc(r[0])}</dt><dd>${tel(r[1])}</dd></div>`).join('') + `</dl></div>`;
+  });
+  html += `<p class="tapnote">Tap any number to dial. Dialing needs a signal; the numbers are stored here.</p>`;
+
+  html += `<h2 class="sec">Money</h2>
+  <div class="card">
+    <h3>Quick conversion</h3>
+    <p class="sub">Working approximations from the trip files, not live rates.</p>
+    <div class="calc">
+      <input id="camt" type="number" inputmode="decimal" placeholder="Amount" value="10000">
+      <select id="ccur">${D.RATES.map(r => `<option value="${r.per}">${esc(r.code)}</option>`).join('')}</select>
+      <span id="calcout">—</span>
+    </div>
+    <dl class="kv" style="margin-top:10px">
+      ${D.RATES.map(r => `<div><dt>${esc(r.code)}</dt><dd>${esc(r.name)} · ~${r.per.toLocaleString()} per USD<br>
+        <span style="color:var(--muted);font-size:12px">${esc(r.ex)}</span></dd></div>`).join('')}
+    </dl>
+  </div>
+  <div class="card">
+    <h3>Budget standing</h3>
+    <dl class="kv">${D.BUDGET.map(b => `<div><dt>${esc(b[0])}</dt><dd class="mono">${esc(b[1])} paid · ${esc(b[2])}–${esc(b[3])} left</dd></div>`).join('')}</dl>
+  </div>`;
+
+  html += `<h2 class="sec">Getting around Japan</h2><div class="card"><h3>Routes and fares</h3><dl class="kv">` +
+    D.TRANSPORT.map(t => `<div><dt style="width:auto;flex:1">${esc(t[0])}</dt>
+      <dd style="flex:none;text-align:right"><span class="mono">${esc(t[1])}</span><br>
+      <span style="color:var(--muted);font-size:12px">${esc(t[2])}</span></dd></div>`).join('') + `</dl></div>`;
+
+  html += `<h2 class="sec">Food notes</h2>`;
+  D.FOOD.forEach(f => html += `<div class="card"><h3>${esc(f.g)}</h3><ul class="plain">${f.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`);
+
+  html += `<h2 class="sec">Phrases</h2>`;
+  D.PHRASES.forEach(p => html += `<div class="card"><h3>${esc(p.lang)}</h3><dl class="kv">` +
+    p.rows.map(r => `<div><dt style="width:auto;flex:0 0 44%">${esc(r[0])}</dt><dd>${esc(r[1])}</dd></div>`).join('') + `</dl></div>`);
+
+  html += `<h2 class="sec">Packing</h2>`;
+  D.PACKING.forEach(p => html += `<div class="card"><h3>${esc(p.g)}</h3><ul class="plain">${p.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`);
+
+  html += `<h2 class="sec">Still open</h2>`;
+  D.OPEN.forEach(o => html += `<div class="card"><h3>${esc(o.p)}</h3><ul class="plain">${o.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`);
+
+  $('#pane-info').innerHTML = html;
+
+  const a = $('#camt'), c = $('#ccur'), out = $('#calcout');
+  const go = () => {
+    const v = parseFloat(a.value);
+    out.textContent = isNaN(v) ? '—' :
+      '≈ $' + (v / parseFloat(c.value)).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2});
+  };
+  a.addEventListener('input', go); c.addEventListener('change', go); go();
 }
 
-// 3. standalone / home screen
-const standalone = window.navigator.standalone === true ||
-                   window.matchMedia('(display-mode: standalone)').matches;
-state.pwa = standalone ? 'ok' : 'wait';
-if (!standalone) CHECKS[2].s = 'Not yet. Tap Share, then Add to Home Screen, then open from the icon.';
+/* ---- search ---- */
+let INDEX = null;
+function buildIndex(){
+  const ix = [];
+  D.DAYS.forEach((d,i) => ix.push({title:`${d.mon} ${d.dnum} — ${d.title}`, tag:'Day', i,
+    body:[d.title, d.sum, ...d.items.map(x => `${x.t} ${x.h} ${x.n||''}`), ...(d.flags||[]).map(f => `${f.t} ${f.b}`)].join(' · ')}));
+  D.FLIGHTS.forEach(f => ix.push({title:f.name, tag:'Flight', body:[f.airline,f.ref,...f.legs,...f.pax.flat(),f.paid,...f.notes].join(' · ')}));
+  D.HOTELS.forEach(h => ix.push({title:h.name, tag:'Hotel', body:[h.city,h.dates,h.status,h.addr,h.tel,...h.kv.flat(),...h.notes].join(' · ')}));
+  D.EXPERIENCES.forEach(e => ix.push({title:e.name, tag:'Booking', body:[e.when,e.status,...e.kv.flat(),...e.notes].join(' · ')}));
+  D.EMERGENCY.forEach(g => ix.push({title:`Emergency — ${g.country}`, tag:'Info', body:g.rows.map(r => r.join(' ')).join(' · ')}));
+  D.FOOD.forEach(f => ix.push({title:f.g, tag:'Food', body:f.items.join(' · ')}));
+  D.PACKING.forEach(p => ix.push({title:`Packing — ${p.g}`, tag:'Packing', body:p.items.join(' · ')}));
+  D.OPEN.forEach(o => ix.push({title:`Open — ${o.p}`, tag:'To do', body:o.items.join(' · ')}));
+  D.PHRASES.forEach(p => ix.push({title:`${p.lang} phrases`, tag:'Phrases', body:p.rows.map(r => r.join(' ')).join(' · ')}));
+  ix.push({title:'Japan transport', tag:'Info', body:D.TRANSPORT.map(t => t.join(' ')).join(' · ')});
+  ix.push({title:'Budget', tag:'Info', body:D.BUDGET.map(b => b.join(' ')).join(' · ')});
+  ix.push({title:'Wedding schedule', tag:'Info', body:D.WEDDING.map(w => w.join(' ')).join(' · ')});
+  return ix;
+}
 
-// 4. service worker
+function hl(text, q){
+  const i = text.toLowerCase().indexOf(q);
+  if (i === -1) return esc(text.slice(0,150));
+  const s = Math.max(0, i-60), e = Math.min(text.length, i+q.length+90);
+  return (s>0?'…':'') + esc(text.slice(s,i)) + '<mark>' + esc(text.slice(i,i+q.length)) + '</mark>' +
+         esc(text.slice(i+q.length,e)) + (e<text.length?'…':'');
+}
+
+function runSearch(q){
+  q = q.trim().toLowerCase();
+  if (!q){ showPane(document.querySelector('nav button.on').dataset.p); return; }
+  if (!INDEX) INDEX = buildIndex();
+  const hits = INDEX.filter(r => (r.title + ' ' + r.body).toLowerCase().includes(q));
+  document.querySelectorAll('.pane').forEach(p => p.classList.remove('on'));
+  const pane = $('#pane-search'); pane.classList.add('on');
+  pane.innerHTML = !hits.length
+    ? `<div class="empty">Nothing matches “${esc(q)}”.</div>`
+    : `<p class="tapnote">${hits.length} match${hits.length===1?'':'es'}</p>` +
+      hits.map(r => `<div class="card"><h3>${esc(r.title)}<span class="pill">${esc(r.tag)}</span></h3>
+        <p class="sub" style="margin:6px 0 0;color:var(--ink);font-size:12.5px;line-height:1.55">${hl(r.body,q)}</p></div>`).join('');
+}
+
+function showPane(p){
+  document.querySelectorAll('.pane').forEach(x => x.classList.remove('on'));
+  $('#pane-'+p).classList.add('on');
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+  window.scrollTo(0,0);
+}
+
+document.querySelectorAll('nav button').forEach(b =>
+  b.addEventListener('click', () => { $('#search').value = ''; showPane(b.dataset.p); }));
+$('#search').addEventListener('input', e => runSearch(e.target.value));
+
+function tickClock(){
+  const now = new Date();
+  let s = now.toLocaleDateString(undefined, {weekday:'short', month:'short', day:'numeric'}) + ' · ' +
+          now.toLocaleTimeString(undefined, {hour:'numeric', minute:'2-digit'});
+  const start = new Date(D.meta.start + 'T00:00:00');
+  const midnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (midnightToday < start){
+    const d = Math.ceil((start - midnightToday)/86400000);
+    s += ' · T-' + d + 'd';
+  }
+  $('#clock').innerHTML = s.replace(' · ', '<br>');
+}
+
+$('#lockBtn').addEventListener('click', () => location.reload());
+$('#forgetBtn').addEventListener('click', () => {
+  if (confirm('Forget this device? You will need the passphrase to unlock again.')){
+    store.clear(); location.reload();
+  }
+});
+
+/* ============================================================
+   BOOT
+   ============================================================ */
 if ('serviceWorker' in navigator && location.protocol === 'https:'){
-  navigator.serviceWorker.register('sw.js')
-    .then(() => navigator.serviceWorker.ready)
-    .then(async () => {
-      const names = await caches.keys();
-      let n = 0;
-      for (const name of names){ n += (await (await caches.open(name)).keys()).length; }
-      state.sw = n > 0 ? 'ok' : 'wait';
-      CHECKS[3].s = n > 0
-        ? n + ' file(s) cached. Turn on Airplane Mode and reload to confirm.'
-        : 'Registered, but nothing cached yet. Reload once.';
-      draw();
-    })
-    .catch(err => { state.sw = 'no'; CHECKS[3].s = 'Failed: ' + err.message; draw(); });
-} else {
-  state.sw = 'no';
-  CHECKS[3].s = location.protocol === 'https:'
-    ? 'This browser has no service worker support.'
-    : 'Needs HTTPS. Will work once published to GitHub Pages.';
+  navigator.serviceWorker.register('sw.js').catch(() => {});
 }
-
-draw();
-document.getElementById('build').textContent =
-  'Loaded ' + new Date().toLocaleString() + (navigator.onLine ? ' · online' : ' · OFFLINE');
+if (!window.crypto || !crypto.subtle){
+  $('#lockSub').textContent = 'This browser cannot decrypt the guide. Open it over https:// in Safari or Chrome.';
+  $('#passWrap').classList.add('hide');
+} else {
+  boot();
+}
 </script>
 </body>
 </html>
