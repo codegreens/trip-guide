@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Trip Guide">
+<meta name="theme-color" content="#111827">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>Smoke Test — Trip Guide</title>
+<!--
+  SMOKE TEST. Not the real guide.
+  Proves four things before we build on this stack:
+    1. GitHub Pages is publishing
+    2. iOS Safari executes JavaScript (Quick Look in Files does not)
+    3. Add to Home Screen produces a standalone app
+    4. The service worker caches everything, so airplane mode works
+  Every asset is local. No CDN, no fonts, no network calls.
+-->
+<style>
+:root{
+  --bg:#f6f7f9; --card:#fff; --ink:#111827; --muted:#6b7280; --line:#e5e7eb;
+  --ok:#15803d; --okbg:#f0fdf4; --okline:#bbf7d0;
+  --no:#b91c1c; --nobg:#fef2f2; --noline:#fecaca;
+  --wait:#92400e; --waitbg:#fffbeb; --waitline:#fde68a;
+  --accent:#0f766e;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#0b0f14; --card:#151b23; --ink:#e8eaed; --muted:#9aa4b2; --line:#252d38;
+    --ok:#86efac; --okbg:#0f2419; --okline:#1f4a33;
+    --no:#fca5a5; --nobg:#2a1414; --noline:#5a2020;
+    --wait:#fcd34d; --waitbg:#2a2113; --waitline:#5a4520;
+    --accent:#5eead4;
+  }
+}
+*{box-sizing:border-box}
+body{
+  margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  padding:calc(20px + env(safe-area-inset-top)) 16px calc(28px + env(safe-area-inset-bottom));
+  max-width:640px;margin:0 auto;-webkit-text-size-adjust:100%;
+}
+h1{font-size:19px;letter-spacing:-.02em;margin:0 0 4px}
+.lede{color:var(--muted);font-size:13px;margin:0 0 20px}
+.check{
+  background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:12px 14px;margin-bottom:10px;display:flex;gap:12px;align-items:flex-start;
+}
+.mark{
+  flex:none;width:26px;height:26px;border-radius:50%;display:flex;align-items:center;
+  justify-content:center;font-size:15px;font-weight:700;border:1px solid;
+}
+.mark.ok{background:var(--okbg);border-color:var(--okline);color:var(--ok)}
+.mark.no{background:var(--nobg);border-color:var(--noline);color:var(--no)}
+.mark.wait{background:var(--waitbg);border-color:var(--waitline);color:var(--wait)}
+.body b{display:block;font-size:14px}
+.body span{display:block;font-size:12.5px;color:var(--muted);margin-top:2px}
+.note{
+  background:var(--waitbg);border:1px solid var(--waitline);color:var(--wait);
+  border-radius:10px;padding:12px 14px;font-size:13px;margin:18px 0 0;line-height:1.5;
+}
+.note b{display:block;margin-bottom:4px}
+.note ol{margin:6px 0 0;padding-left:20px}
+.note li{margin:4px 0}
+footer{margin-top:24px;font-size:11.5px;color:var(--muted);line-height:1.6;text-align:center}
+code{
+  font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  background:var(--bg);border:1px solid var(--line);border-radius:4px;padding:1px 5px;
+}
+</style>
+</head>
+<body>
+
+<h1>Smoke test</h1>
+<p class="lede">If all four are green, the stack works and I can build the real guide on it.</p>
+
+<div id="checks"></div>
+
+<div class="note">
+  <b>Run these in order</b>
+  <ol>
+    <li>Open this page in <b>Safari on your iPhone</b>. Checks 1 and 2 should go green immediately.</li>
+    <li>Wait for check 4 to go green. It takes a second or two on first load.</li>
+    <li>Tap Share, then <b>Add to Home Screen</b>. Open it from the icon. Check 3 turns green.</li>
+    <li>Turn on <b>Airplane Mode</b>, then open the icon again. If the page still loads, offline works.</li>
+    <li>Send the link to Margaret and have her do the same.</li>
+  </ol>
+</div>
+
+<footer>
+  Smoke test only. No trip data on this page.<br>
+  <span id="build"></span>
+</footer>
+
+<script>
+const CHECKS = [
+  {id:'js',   t:'JavaScript runs',        s:'This page rendered from script, so Safari is executing it. Files.app could not.'},
+  {id:'https',t:'Served over HTTPS',      s:'Required for service workers. GitHub Pages does this automatically.'},
+  {id:'pwa',  t:'Running from Home Screen', s:'Turns green only when opened from the icon, not from Safari.'},
+  {id:'sw',   t:'Service worker cached the page', s:'This is what makes airplane mode work.'}
+];
+
+const state = {js:'ok', https:'wait', pwa:'wait', sw:'wait'};
+
+function draw(){
+  document.getElementById('checks').innerHTML = CHECKS.map((c,i) => {
+    const st = state[c.id];
+    const glyph = st === 'ok' ? '✓' : st === 'no' ? '✕' : '…';
+    return `<div class="check">
+      <div class="mark ${st}">${glyph}</div>
+      <div class="body"><b>${i+1}. ${c.t}</b><span>${c.s}</span></div>
+    </div>`;
+  }).join('');
+}
+
+// 2. HTTPS
+state.https = (location.protocol === 'https:') ? 'ok' : 'no';
+if (location.protocol === 'file:'){
+  CHECKS[1].s = 'Opened as a local file. Upload to GitHub Pages and open the https:// URL instead.';
+}
+
+// 3. standalone / home screen
+const standalone = window.navigator.standalone === true ||
+                   window.matchMedia('(display-mode: standalone)').matches;
+state.pwa = standalone ? 'ok' : 'wait';
+if (!standalone) CHECKS[2].s = 'Not yet. Tap Share, then Add to Home Screen, then open from the icon.';
+
+// 4. service worker
+if ('serviceWorker' in navigator && location.protocol === 'https:'){
+  navigator.serviceWorker.register('sw.js')
+    .then(() => navigator.serviceWorker.ready)
+    .then(async () => {
+      const names = await caches.keys();
+      let n = 0;
+      for (const name of names){ n += (await (await caches.open(name)).keys()).length; }
+      state.sw = n > 0 ? 'ok' : 'wait';
+      CHECKS[3].s = n > 0
+        ? n + ' file(s) cached. Turn on Airplane Mode and reload to confirm.'
+        : 'Registered, but nothing cached yet. Reload once.';
+      draw();
+    })
+    .catch(err => { state.sw = 'no'; CHECKS[3].s = 'Failed: ' + err.message; draw(); });
+} else {
+  state.sw = 'no';
+  CHECKS[3].s = location.protocol === 'https:'
+    ? 'This browser has no service worker support.'
+    : 'Needs HTTPS. Will work once published to GitHub Pages.';
+}
+
+draw();
+document.getElementById('build').textContent =
+  'Loaded ' + new Date().toLocaleString() + (navigator.onLine ? ' · online' : ' · OFFLINE');
+</script>
+</body>
+</html>
