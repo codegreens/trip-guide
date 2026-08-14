@@ -1,0 +1,12 @@
+# Plaintext guide content. NEVER commit this.
+# Anything here would be published to a public repository in the clear,
+# and git history is permanent even after a delete.
+content/
+*.json
+
+# Working files
+*.bak
+*.tmp
+.DS_Store
+Thumbs.db
+__pycache__/
