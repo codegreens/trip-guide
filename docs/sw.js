@@ -5,7 +5,7 @@
    CACHE is bumped automatically by Tools/trip-guide-publish.py on every publish.
    Without that bump, phones keep serving the old guide.enc from cache forever. */
 
-const CACHE = 'trip-guide-v1';
+const CACHE = 'trip-guide-v2';
 
 /* sw.js is deliberately NOT in this list. The browser manages the worker script
    itself, and precaching it can strand a phone on an old worker. */
