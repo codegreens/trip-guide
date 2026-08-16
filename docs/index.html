@@ -201,6 +201,47 @@ ul.plain li{margin:3px 0}
 .foot{font-size:11px;color:var(--muted);text-align:center;padding:18px 10px 4px;line-height:1.6}
 mark{background:#fde68a;color:#111827;border-radius:2px;padding:0 1px}
 .tapnote{font-size:11px;color:var(--muted);margin:0 2px 10px}
+
+/* ================= DOCUMENTS ================= */
+.docs{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.docs .lbl{width:100%;font-size:10px;font-weight:700;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--muted);margin-bottom:-3px}
+.doc{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:12px;font-weight:600;
+  padding:7px 11px;border-radius:999px;cursor:pointer;
+  border:1px solid var(--book-line);background:var(--book-bg);color:var(--book-ink)}
+.doc:active{opacity:.55}
+.doc .g{font-size:12px;line-height:1}
+
+/* Full screen viewer. Dark on purpose: a scanned page reads better against it,
+   and it makes obvious you have left the guide and are looking at a document. */
+#viewer{position:fixed;inset:0;z-index:200;background:#0b0f14;display:flex;flex-direction:column}
+.vtop{display:flex;align-items:center;gap:10px;flex:none;color:#e8eaed;background:#151b23;
+  border-bottom:1px solid #252d38;padding:calc(9px + env(safe-area-inset-top)) 12px 9px}
+.vtop .vt{flex:1;min-width:0}
+.vtop .vt b{display:block;font-size:13.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vtop .vt span{display:block;font-size:11px;color:#9aa4b2;margin-top:1px}
+.vbtn{font:inherit;font-size:12.5px;font-weight:600;padding:7px 12px;border-radius:9px;cursor:pointer;
+  border:1px solid #2c3644;background:#0b0f14;color:#e8eaed;flex:none}
+.vbtn:disabled{opacity:.3}
+.vbody{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;padding:10px;text-align:center}
+.vbody img{max-width:100%;height:auto;border-radius:6px;background:#fff;display:inline-block}
+.vmsg{color:#9aa4b2;font-size:13px;padding:44px 18px;line-height:1.6}
+.vnav{flex:none;display:flex;align-items:center;justify-content:center;gap:14px;color:#9aa4b2;
+  font-size:12px;background:#151b23;border-top:1px solid #252d38;
+  padding:9px 12px calc(9px + env(safe-area-inset-bottom))}
+body.locked{overflow:hidden}
+
+/* ================= SEARCH RESULTS + SCROLL ================= */
+header{transition:transform .2s ease}
+header.up{transform:translateY(-100%)}
+.gp{font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  color:var(--muted);margin:20px 2px 8px}
+.gp:first-child{margin-top:2px}
+.res{cursor:pointer}
+.res:active{opacity:.6}
+.res .go{font-size:11px;color:var(--accent);font-weight:600;margin-top:7px;display:block}
+.hit{animation:hitfade 1.4s ease}
+@keyframes hitfade{0%,55%{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent)}100%{}}
 </style>
 </head>
 <body>
@@ -246,6 +287,7 @@ mark{background:#fde68a;color:#111827;border-radius:2px;padding:0 1px}
     <div class="pane on" id="pane-now"></div>
     <div class="pane" id="pane-days"></div>
     <div class="pane" id="pane-docs"></div>
+    <div class="pane" id="pane-money"></div>
     <div class="pane" id="pane-info"></div>
     <div class="pane" id="pane-search"></div>
     <div class="foot">
@@ -257,9 +299,24 @@ mark{background:#fde68a;color:#111827;border-radius:2px;padding:0 1px}
   <nav>
     <button data-p="now" class="on"><span class="g">◉</span>Now</button>
     <button data-p="days"><span class="g">▤</span>Days</button>
-    <button data-p="docs"><span class="g">✦</span>Bookings</button>
+    <button data-p="docs"><span class="g">✦</span>Docs</button>
+    <button data-p="money"><span class="g">⇄</span>Money</button>
     <button data-p="info"><span class="g">✚</span>Info</button>
   </nav>
+</div>
+
+<!-- ================= DOCUMENT VIEWER ================= -->
+<div id="viewer" class="hide">
+  <div class="vtop">
+    <div class="vt"><b id="vTitle"></b><span id="vSub"></span></div>
+    <button class="vbtn" id="vClose">Done</button>
+  </div>
+  <div class="vbody" id="vBody"></div>
+  <div class="vnav">
+    <button class="vbtn" id="vPrev">‹ Prev</button>
+    <span id="vCount">—</span>
+    <button class="vbtn" id="vNext">Next ›</button>
+  </div>
 </div>
 
 <script>
@@ -301,6 +358,46 @@ async function decryptWith(key){
   const {iv, ct} = await getBlob();
   const pt = await crypto.subtle.decrypt({name:'AES-GCM', iv}, key, ct);
   return JSON.parse(dec.decode(pt));
+}
+
+/* ---- booking documents ----
+   Each page of each document is its own file under d/, encrypted with
+   D.DOCS.key: a random 256-bit key that lives inside the payload.
+
+       d/<id>-<n>.enc = "TGD1" (4) | iv (12) | AES-256-GCM ciphertext+tag
+
+   The key comes from the decrypted guide rather than from the passphrase on
+   purpose. After the first unlock this device only ever holds the master key
+   wrapped behind a PIN, and never sees the passphrase again, so anything
+   derived from the passphrase would be unavailable on every later open.
+
+   Decrypted pages are cached as object URLs for the life of the tab. They are
+   never written to disk and vanish when the tab closes. */
+let DOC_KEY = null;
+const PAGES = new Map();
+
+async function docKey(){
+  if (DOC_KEY) return DOC_KEY;
+  const hex = D && D.DOCS && D.DOCS.key;
+  if (!hex || hex.length !== 64) throw new Error('This guide carries no document key.');
+  const raw = new Uint8Array(hex.match(/../g).map(h => parseInt(h, 16)));
+  DOC_KEY = await crypto.subtle.importKey('raw', raw, {name:'AES-GCM'}, false, ['decrypt']);
+  return DOC_KEY;
+}
+
+async function pageURL(path){
+  if (PAGES.has(path)) return PAGES.get(path);
+  let res;
+  try { res = await fetch(path, {cache:'force-cache'}); }
+  catch { throw new Error('offline'); }
+  if (!res.ok) throw new Error(res.status === 404 ? 'missing' : 'offline');
+  const buf = new Uint8Array(await res.arrayBuffer());
+  if (dec.decode(buf.slice(0,4)) !== 'TGD1') throw new Error('format');
+  const pt = await crypto.subtle.decrypt(
+    {name:'AES-GCM', iv: buf.slice(4,16)}, await docKey(), buf.slice(16));
+  const url = URL.createObjectURL(new Blob([pt], {type:'image/jpeg'}));
+  PAGES.set(path, url);
+  return url;
 }
 
 /* ---- device store: master key wrapped by a PIN-derived key ---- */
@@ -480,10 +577,85 @@ function launch(data){
   $('#lock').classList.add('hide');
   $('#app').classList.remove('hide');
   if (D.meta && D.meta.title) $('#appTitle').textContent = D.meta.title;
-  $('#search').placeholder = 'Search everything (hotel, flight, ¥…)';
-  renderNow(); renderDays(); renderDocs(); renderInfo();
+  $('#search').placeholder = 'Search everything (hotel, flight, ticket…)';
+  renderNow(); renderDays(); renderDocs(); renderMoney(); renderInfo();
   tickClock(); setInterval(tickClock, 30000);
 }
+
+/* ============================================================
+   DOCUMENT VIEWER
+   ============================================================ */
+let VDOC = null, VPAGE = 0;
+
+const docsFor = link => ((D.DOCS && D.DOCS.items) || []).filter(d => d.link === link);
+const docById = id => ((D.DOCS && D.DOCS.items) || []).find(d => d.id === id);
+
+/* Chips under a booking card. One chip per document, since a document is the
+   thing you hand over; pages are navigated inside the viewer. */
+function docChips(link){
+  const list = docsFor(link);
+  if (!list.length) return '';
+  return `<div class="docs"><span class="lbl">Documents</span>` + list.map(d =>
+    `<button class="doc" data-doc="${esc(d.id)}">
+       <span class="g">◧</span>${esc(d.who || d.label)}${d.pages.length > 1 ? ` · ${d.pages.length}p` : ''}
+     </button>`).join('') + `</div>`;
+}
+
+function wireDocs(root){
+  root.querySelectorAll('button[data-doc]').forEach(b =>
+    b.addEventListener('click', e => { e.stopPropagation(); openDoc(b.dataset.doc); }));
+}
+
+async function showPage(){
+  const body = $('#vBody'), p = VDOC.pages[VPAGE];
+  $('#vCount').textContent = VDOC.pages.length > 1
+    ? `Page ${VPAGE + 1} of ${VDOC.pages.length}` : 'Single page';
+  $('#vPrev').disabled = VPAGE === 0;
+  $('#vNext').disabled = VPAGE >= VDOC.pages.length - 1;
+  body.innerHTML = `<div class="vmsg">Decrypting…</div>`;
+  try {
+    const url = await pageURL(p.f);
+    if (!VDOC) return;                        // closed while we were working
+    body.innerHTML = `<img alt="${esc(VDOC.label)}, page ${VPAGE + 1}" src="${url}">`;
+    body.scrollTop = 0;
+  } catch (err){
+    const why = {
+      missing: 'This document has not been published yet. Run the publish script.',
+      offline: 'This page is not on the phone yet. Open the guide once with a signal and it will be stored for good.',
+      format:  'That file is not in the expected document format.'
+    }[err.message] || 'This page could not be decrypted.';
+    body.innerHTML = `<div class="vmsg">${esc(why)}</div>`;
+  }
+}
+
+function openDoc(id){
+  const d = docById(id);
+  if (!d) return;
+  VDOC = d; VPAGE = 0;
+  $('#vTitle').textContent = d.label;
+  $('#vSub').textContent = [d.who, d.sub].filter(Boolean).join(' · ');
+  $('#viewer').classList.remove('hide');
+  document.body.classList.add('locked');
+  // A history entry so the iOS back swipe closes the document rather than
+  // leaving the app entirely.
+  history.pushState({viewer:true}, '');
+  showPage();
+}
+
+function closeDoc(fromPop){
+  if (!VDOC) return;
+  VDOC = null;
+  $('#viewer').classList.add('hide');
+  $('#vBody').innerHTML = '';
+  document.body.classList.remove('locked');
+  if (!fromPop && history.state && history.state.viewer) history.back();
+}
+
+$('#vClose').addEventListener('click', () => closeDoc(false));
+$('#vPrev').addEventListener('click', () => { if (VPAGE > 0){ VPAGE--; showPage(); } });
+$('#vNext').addEventListener('click', () => {
+  if (VDOC && VPAGE < VDOC.pages.length - 1){ VPAGE++; showPage(); } });
+window.addEventListener('popstate', () => closeDoc(true));
 
 const flagHTML = f => `<div class="flag ${f.k}"><b>${esc(f.t)}</b>${esc(f.b)}</div>`;
 
@@ -525,8 +697,9 @@ function renderDays(){
 function sleepCard(today){
   /* Uses explicit from/to on each hotel. Half-open range: the checkout date is
      not a night you sleep there. */
-  const h = D.HOTELS.find(x => x.from && today >= x.from && today < x.to);
-  if (!h) return `<div class="card"><h3>No hotel tonight</h3><p class="sub">Either you are in the air, or you are home.</p></div>`;
+  const i = D.HOTELS.findIndex(x => x.from && today >= x.from && today < x.to);
+  if (i === -1) return `<div class="card"><h3>No hotel tonight</h3><p class="sub">Either you are in the air, or you are home.</p></div>`;
+  const h = D.HOTELS[i];
   return `<div class="card">
     <h3>${esc(h.name)}</h3>
     <p class="sub">${esc(h.city)} · ${esc(h.dates)}</p>
@@ -535,6 +708,7 @@ function sleepCard(today){
       ${h.tel ? `<div><dt>Phone</dt><dd>${tel(h.tel)}</dd></div>` : ''}
       ${h.kv.slice(0,2).map(([k,v]) => `<div><dt>${esc(k)}</dt><dd class="mono">${esc(v)}</dd></div>`).join('')}
     </dl>
+    ${docChips('HOTELS:' + i)}
   </div>`;
 }
 
@@ -575,12 +749,13 @@ function renderNow(){
 
   $('#pane-now').innerHTML = html;
   wireDays($('#pane-now'));
+  wireDocs($('#pane-now'));
 }
 
 function renderDocs(){
   let html = `<h2 class="sec">Flights</h2>`;
-  D.FLIGHTS.forEach(f => {
-    html += `<div class="card">
+  D.FLIGHTS.forEach((f, i) => {
+    html += `<div class="card" id="c-FLIGHTS-${i}">
       <h3>${esc(f.name)}</h3>
       <p class="sub">${esc(f.airline)} · issued ${esc(f.issued)}</p>
       <dl class="kv">
@@ -590,13 +765,14 @@ function renderDocs(){
         <div><dt>Total paid</dt><dd><b>${esc(f.paid)}</b></dd></div>
       </dl>
       <ul class="plain">${f.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>
+      ${docChips('FLIGHTS:' + i)}
     </div>`;
   });
 
   html += `<h2 class="sec">Hotels</h2>`;
-  D.HOTELS.forEach(h => {
+  D.HOTELS.forEach((h, i) => {
     const pill = h.status === 'Booked' ? 'ok' : (h.status.indexOf('unpaid') > -1 ? 'no' : '');
-    html += `<div class="card">
+    html += `<div class="card" id="c-HOTELS-${i}">
       <h3>${esc(h.name)}<span class="pill ${pill}">${esc(h.status)}</span></h3>
       <p class="sub">${esc(h.city)} · ${esc(h.dates)}</p>
       <dl class="kv">
@@ -605,37 +781,49 @@ function renderDocs(){
         ${h.kv.map(([k,v]) => `<div><dt>${esc(k)}</dt><dd class="mono">${esc(v)}</dd></div>`).join('')}
       </dl>
       ${h.notes.length ? `<ul class="plain">${h.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+      ${docChips('HOTELS:' + i)}
     </div>`;
   });
 
   html += `<h2 class="sec">Experiences & other</h2>`;
-  D.EXPERIENCES.forEach(e => {
-    html += `<div class="card">
+  D.EXPERIENCES.forEach((e, i) => {
+    html += `<div class="card" id="c-EXPERIENCES-${i}">
       <h3>${esc(e.name)}<span class="pill ${e.status.indexOf('UNPAID') > -1 ? 'no' : 'ok'}">${esc(e.status)}</span></h3>
       <p class="sub">${esc(e.when)}</p>
       <dl class="kv">${e.kv.map(([k,v]) => `<div><dt>${esc(k)}</dt><dd class="mono">${esc(v)}</dd></div>`).join('')}</dl>
       ${e.notes.length ? `<ul class="plain">${e.notes.map(n => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+      ${docChips('EXPERIENCES:' + i)}
     </div>`;
   });
 
-  html += `<h2 class="sec">Wedding schedule</h2><div class="card"><dl class="kv">` +
+  html += `<h2 class="sec">Wedding schedule</h2><div class="card" id="c-WEDDING"><dl class="kv">` +
     D.WEDDING.map(w => `<div><dt>${esc(w[1].split(',')[0])}</dt><dd><b>${esc(w[0])}</b><br>
       <span style="color:var(--muted);font-size:12px">${esc(w[1])} · ${esc(w[2])}<br>Dress: ${esc(w[3])}</span></dd></div>`).join('') +
     `</dl><ul class="plain"><li>Buses to the welcome party leave USV at 4:45 PM on Aug 28.</li></ul></div>`;
 
+  /* Every document again, flat, grouped by category. The chips above are for
+     when you are already looking at a booking; this is for when you just want
+     the ticket and do not want to remember which card it hangs off. */
+  const all = (D.DOCS && D.DOCS.items) || [];
+  if (all.length){
+    const cats = [...new Set(all.map(d => d.cat))];
+    html += `<h2 class="sec">All documents</h2>`;
+    cats.forEach(cat => {
+      html += `<div class="card" id="c-DOC-${esc(cat)}"><h3>${esc(cat)}</h3>
+        <div class="docs">` + all.filter(d => d.cat === cat).map(d =>
+          `<button class="doc" data-doc="${esc(d.id)}"><span class="g">◧</span>${esc(d.label)}${d.who ? ' · ' + esc(d.who) : ''}</button>`
+        ).join('') + `</div></div>`;
+    });
+    html += `<p class="tapnote">Stored on this phone, encrypted. Passports, visas and insurance cards are deliberately not here: they live in the Files app.</p>`;
+  }
+
   $('#pane-docs').innerHTML = html;
+  wireDocs($('#pane-docs'));
 }
 
-function renderInfo(){
-  let html = `<h2 class="sec">Emergency numbers</h2>`;
-  D.EMERGENCY.forEach(g => {
-    html += `<div class="card"><h3>${esc(g.country)}</h3><dl class="kv">` +
-      g.rows.map(r => `<div><dt>${esc(r[0])}</dt><dd>${tel(r[1])}</dd></div>`).join('') + `</dl></div>`;
-  });
-  html += `<p class="tapnote">Tap any number to dial. Dialing needs a signal; the numbers are stored here.</p>`;
-
-  html += `<h2 class="sec">Money</h2>
-  <div class="card">
+function renderMoney(){
+  let html = `<h2 class="sec">Convert</h2>
+  <div class="card" id="c-CALC">
     <h3>Quick conversion</h3>
     <p class="sub">Working approximations from the trip files, not live rates.</p>
     <div class="calc">
@@ -643,35 +831,20 @@ function renderInfo(){
       <select id="ccur">${D.RATES.map(r => `<option value="${r.per}">${esc(r.code)}</option>`).join('')}</select>
       <span id="calcout">—</span>
     </div>
-    <dl class="kv" style="margin-top:10px">
-      ${D.RATES.map(r => `<div><dt>${esc(r.code)}</dt><dd>${esc(r.name)} · ~${r.per.toLocaleString()} per USD<br>
-        <span style="color:var(--muted);font-size:12px">${esc(r.ex)}</span></dd></div>`).join('')}
-    </dl>
   </div>
-  <div class="card">
-    <h3>Budget standing</h3>
-    <dl class="kv">${D.BUDGET.map(b => `<div><dt>${esc(b[0])}</dt><dd class="mono">${esc(b[1])} paid · ${esc(b[2])}–${esc(b[3])} left</dd></div>`).join('')}</dl>
-  </div>`;
 
-  html += `<h2 class="sec">Getting around Japan</h2><div class="card"><h3>Routes and fares</h3><dl class="kv">` +
-    D.TRANSPORT.map(t => `<div><dt style="width:auto;flex:1">${esc(t[0])}</dt>
-      <dd style="flex:none;text-align:right"><span class="mono">${esc(t[1])}</span><br>
-      <span style="color:var(--muted);font-size:12px">${esc(t[2])}</span></dd></div>`).join('') + `</dl></div>`;
+  <h2 class="sec">Rates</h2>
+  <div class="card" id="c-RATES"><dl class="kv">
+    ${D.RATES.map(r => `<div><dt>${esc(r.code)}</dt><dd>${esc(r.name)} · ~${r.per.toLocaleString()} per USD<br>
+      <span style="color:var(--muted);font-size:12px">${esc(r.ex)}</span></dd></div>`).join('')}
+  </dl></div>
 
-  html += `<h2 class="sec">Food notes</h2>`;
-  D.FOOD.forEach(f => html += `<div class="card"><h3>${esc(f.g)}</h3><ul class="plain">${f.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`);
+  <h2 class="sec">Budget standing</h2>
+  <div class="card" id="c-BUDGET"><dl class="kv">
+    ${D.BUDGET.map(b => `<div><dt>${esc(b[0])}</dt><dd class="mono">${esc(b[1])} paid · ${esc(b[2])}–${esc(b[3])} left</dd></div>`).join('')}
+  </dl></div>`;
 
-  html += `<h2 class="sec">Phrases</h2>`;
-  D.PHRASES.forEach(p => html += `<div class="card"><h3>${esc(p.lang)}</h3><dl class="kv">` +
-    p.rows.map(r => `<div><dt style="width:auto;flex:0 0 44%">${esc(r[0])}</dt><dd>${esc(r[1])}</dd></div>`).join('') + `</dl></div>`);
-
-  html += `<h2 class="sec">Packing</h2>`;
-  D.PACKING.forEach(p => html += `<div class="card"><h3>${esc(p.g)}</h3><ul class="plain">${p.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`);
-
-  html += `<h2 class="sec">Still open</h2>`;
-  D.OPEN.forEach(o => html += `<div class="card"><h3>${esc(o.p)}</h3><ul class="plain">${o.items.map(i => `<li>${esc(i)}</li>`).join('')}</ul></div>`);
-
-  $('#pane-info').innerHTML = html;
+  $('#pane-money').innerHTML = html;
 
   const a = $('#camt'), c = $('#ccur'), out = $('#calcout');
   const go = () => {
@@ -682,24 +855,107 @@ function renderInfo(){
   a.addEventListener('input', go); c.addEventListener('change', go); go();
 }
 
+function renderInfo(){
+  let html = `<h2 class="sec">Emergency numbers</h2>`;
+  D.EMERGENCY.forEach((g, i) => {
+    html += `<div class="card" id="c-EMERGENCY-${i}"><h3>${esc(g.country)}</h3><dl class="kv">` +
+      g.rows.map(r => `<div><dt>${esc(r[0])}</dt><dd>${tel(r[1])}</dd></div>`).join('') + `</dl></div>`;
+  });
+  html += `<p class="tapnote">Tap any number to dial. Dialing needs a signal; the numbers are stored here.</p>`;
+
+  html += `<h2 class="sec">Getting around Japan</h2><div class="card" id="c-TRANSPORT"><h3>Routes and fares</h3><dl class="kv">` +
+    D.TRANSPORT.map(t => `<div><dt style="width:auto;flex:1">${esc(t[0])}</dt>
+      <dd style="flex:none;text-align:right"><span class="mono">${esc(t[1])}</span><br>
+      <span style="color:var(--muted);font-size:12px">${esc(t[2])}</span></dd></div>`).join('') + `</dl></div>`;
+
+  html += `<h2 class="sec">Food notes</h2>`;
+  D.FOOD.forEach((f, i) => html += `<div class="card" id="c-FOOD-${i}"><h3>${esc(f.g)}</h3><ul class="plain">${f.items.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`);
+
+  html += `<h2 class="sec">Phrases</h2>`;
+  D.PHRASES.forEach((p, i) => html += `<div class="card" id="c-PHRASES-${i}"><h3>${esc(p.lang)}</h3><dl class="kv">` +
+    p.rows.map(r => `<div><dt style="width:auto;flex:0 0 44%">${esc(r[0])}</dt><dd>${esc(r[1])}</dd></div>`).join('') + `</dl></div>`);
+
+  html += `<h2 class="sec">Packing</h2>`;
+  D.PACKING.forEach((p, i) => html += `<div class="card" id="c-PACKING-${i}"><h3>${esc(p.g)}</h3><ul class="plain">${p.items.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`);
+
+  html += `<h2 class="sec">Still open</h2>`;
+  D.OPEN.forEach((o, i) => html += `<div class="card" id="c-OPEN-${i}"><h3>${esc(o.p)}</h3><ul class="plain">${o.items.map(x => `<li>${esc(x)}</li>`).join('')}</ul></div>`);
+
+  $('#pane-info').innerHTML = html;
+}
+
 /* ---- search ---- */
 let INDEX = null;
+
+/* Every entry carries where it lives, so a result is somewhere you can go and
+   not just something you can read. `go` is either {doc:id} to open the viewer,
+   {p:'days', i:n} to expand a day, or {p:pane, id:elementId} to scroll to a card. */
 function buildIndex(){
   const ix = [];
-  D.DAYS.forEach((d,i) => ix.push({title:`${d.mon} ${d.dnum} — ${d.title}`, tag:'Day', i,
+  D.DAYS.forEach((d,i) => ix.push({title:`${d.mon} ${d.dnum} — ${d.title}`, tag:'Day', grp:'Itinerary',
+    go:{p:'days', i},
     body:[d.title, d.sum, ...d.items.map(x => `${x.t} ${x.h} ${x.n||''}`), ...(d.flags||[]).map(f => `${f.t} ${f.b}`)].join(' · ')}));
-  D.FLIGHTS.forEach(f => ix.push({title:f.name, tag:'Flight', body:[f.airline,f.ref,...f.legs,...f.pax.flat(),f.paid,...f.notes].join(' · ')}));
-  D.HOTELS.forEach(h => ix.push({title:h.name, tag:'Hotel', body:[h.city,h.dates,h.status,h.addr,h.tel,...h.kv.flat(),...h.notes].join(' · ')}));
-  D.EXPERIENCES.forEach(e => ix.push({title:e.name, tag:'Booking', body:[e.when,e.status,...e.kv.flat(),...e.notes].join(' · ')}));
-  D.EMERGENCY.forEach(g => ix.push({title:`Emergency — ${g.country}`, tag:'Info', body:g.rows.map(r => r.join(' ')).join(' · ')}));
-  D.FOOD.forEach(f => ix.push({title:f.g, tag:'Food', body:f.items.join(' · ')}));
-  D.PACKING.forEach(p => ix.push({title:`Packing — ${p.g}`, tag:'Packing', body:p.items.join(' · ')}));
-  D.OPEN.forEach(o => ix.push({title:`Open — ${o.p}`, tag:'To do', body:o.items.join(' · ')}));
-  D.PHRASES.forEach(p => ix.push({title:`${p.lang} phrases`, tag:'Phrases', body:p.rows.map(r => r.join(' ')).join(' · ')}));
-  ix.push({title:'Japan transport', tag:'Info', body:D.TRANSPORT.map(t => t.join(' ')).join(' · ')});
-  ix.push({title:'Budget', tag:'Info', body:D.BUDGET.map(b => b.join(' ')).join(' · ')});
-  ix.push({title:'Wedding schedule', tag:'Info', body:D.WEDDING.map(w => w.join(' ')).join(' · ')});
+  D.FLIGHTS.forEach((f,i) => ix.push({title:f.name, tag:'Flight', grp:'Itinerary',
+    go:{p:'docs', id:`c-FLIGHTS-${i}`},
+    body:[f.airline,f.ref,...f.legs,...f.pax.flat(),f.paid,...f.notes].join(' · ')}));
+  D.HOTELS.forEach((h,i) => ix.push({title:h.name, tag:'Hotel', grp:'Itinerary',
+    go:{p:'docs', id:`c-HOTELS-${i}`},
+    body:[h.city,h.dates,h.status,h.addr,h.tel,...h.kv.flat(),...h.notes].join(' · ')}));
+  D.EXPERIENCES.forEach((e,i) => ix.push({title:e.name, tag:'Booking', grp:'Itinerary',
+    go:{p:'docs', id:`c-EXPERIENCES-${i}`},
+    body:[e.when,e.status,...e.kv.flat(),...e.notes].join(' · ')}));
+  D.EMERGENCY.forEach((g,i) => ix.push({title:`Emergency — ${g.country}`, tag:'Info', grp:'Itinerary',
+    go:{p:'info', id:`c-EMERGENCY-${i}`}, body:g.rows.map(r => r.join(' ')).join(' · ')}));
+  D.FOOD.forEach((f,i) => ix.push({title:f.g, tag:'Food', grp:'Itinerary',
+    go:{p:'info', id:`c-FOOD-${i}`}, body:f.items.join(' · ')}));
+  D.PACKING.forEach((p,i) => ix.push({title:`Packing — ${p.g}`, tag:'Packing', grp:'Itinerary',
+    go:{p:'info', id:`c-PACKING-${i}`}, body:p.items.join(' · ')}));
+  D.OPEN.forEach((o,i) => ix.push({title:`Open — ${o.p}`, tag:'To do', grp:'Itinerary',
+    go:{p:'info', id:`c-OPEN-${i}`}, body:o.items.join(' · ')}));
+  D.PHRASES.forEach((p,i) => ix.push({title:`${p.lang} phrases`, tag:'Phrases', grp:'Itinerary',
+    go:{p:'info', id:`c-PHRASES-${i}`}, body:p.rows.map(r => r.join(' ')).join(' · ')}));
+  ix.push({title:'Japan transport', tag:'Info', grp:'Itinerary',
+    go:{p:'info', id:'c-TRANSPORT'}, body:D.TRANSPORT.map(t => t.join(' ')).join(' · ')});
+  ix.push({title:'Budget', tag:'Money', grp:'Itinerary',
+    go:{p:'money', id:'c-BUDGET'}, body:D.BUDGET.map(b => b.join(' ')).join(' · ')});
+  ix.push({title:'Exchange rates', tag:'Money', grp:'Itinerary',
+    go:{p:'money', id:'c-RATES'}, body:D.RATES.map(r => `${r.code} ${r.name} ${r.per} ${r.ex}`).join(' · ')});
+  ix.push({title:'Wedding schedule', tag:'Info', grp:'Itinerary',
+    go:{p:'docs', id:'c-WEDDING'}, body:D.WEDDING.map(w => w.join(' ')).join(' · ')});
+
+  /* Documents are their own group so a search for "flight" surfaces the
+     tickets as tickets, not buried among itinerary prose. */
+  ((D.DOCS && D.DOCS.items) || []).forEach(d => ix.push({
+    title: d.label, tag: d.cat, grp:'Documents', go:{doc:d.id},
+    body: [d.who, d.sub, d.cat, `${d.pages.length} page${d.pages.length === 1 ? '' : 's'}`,
+           'document ticket confirmation pdf'].filter(Boolean).join(' · ')}));
   return ix;
+}
+
+/* Send the user to a result. Days expand in place; cards get a brief outline so
+   the eye lands on the right one after the pane scrolls. */
+function goTo(go){
+  if (!go) return;
+  if (go.doc){ openDoc(go.doc); return; }
+  $('#search').value = '';
+  showPane(go.p);
+  // Clear the previous landing spot, or old highlights pile up and two cards
+  // claim to be the one you asked for.
+  document.querySelectorAll('.hit').forEach(x => x.classList.remove('hit'));
+  requestAnimationFrame(() => {
+    let el = null;
+    if (go.p === 'days'){
+      el = $(`#pane-days .day[data-i="${go.i}"]`);
+      if (el) el.classList.add('open');
+    } else if (go.id){
+      el = document.getElementById(go.id);
+    }
+    if (!el) return;
+    el.scrollIntoView({block:'center', behavior:'smooth'});
+    el.classList.remove('hit');
+    void el.offsetWidth;
+    el.classList.add('hit');
+  });
 }
 
 function hl(text, q){
@@ -717,23 +973,66 @@ function runSearch(q){
   const hits = INDEX.filter(r => (r.title + ' ' + r.body).toLowerCase().includes(q));
   document.querySelectorAll('.pane').forEach(p => p.classList.remove('on'));
   const pane = $('#pane-search'); pane.classList.add('on');
-  pane.innerHTML = !hits.length
-    ? `<div class="empty">Nothing matches “${esc(q)}”.</div>`
-    : `<p class="tapnote">${hits.length} match${hits.length===1?'':'es'}</p>` +
-      hits.map(r => `<div class="card"><h3>${esc(r.title)}<span class="pill">${esc(r.tag)}</span></h3>
-        <p class="sub" style="margin:6px 0 0;color:var(--ink);font-size:12.5px;line-height:1.55">${hl(r.body,q)}</p></div>`).join('');
+
+  // Results replace whatever pane you were reading, so inherit none of its
+  // scroll position: otherwise you type a query and land halfway down the hits.
+  window.scrollTo(0, 0);
+  $('header').classList.remove('up');
+  lastY = 0;
+
+  if (!hits.length){
+    pane.innerHTML = `<div class="empty">Nothing matches “${esc(q)}”.</div>`;
+    return;
+  }
+
+  const card = (r, n) => `<div class="card res" data-n="${n}" data-grp="${esc(r.grp)}">
+      <h3>${esc(r.title)}<span class="pill">${esc(r.tag)}</span></h3>
+      <p class="sub" style="margin:6px 0 0;color:var(--ink);font-size:12.5px;line-height:1.55">${hl(r.body, q)}</p>
+      <span class="go">${r.go && r.go.doc ? 'Open document ›' : 'Go to this ›'}</span>
+    </div>`;
+
+  // Documents first: if a ticket matches, that is almost always what was wanted.
+  const docs = [], rest = [];
+  hits.forEach((r, n) => (r.grp === 'Documents' ? docs : rest).push(card(r, n)));
+
+  pane.innerHTML =
+    `<p class="tapnote">${hits.length} match${hits.length === 1 ? '' : 'es'}</p>` +
+    (docs.length ? `<div class="gp">Documents</div>` + docs.join('') : '') +
+    (rest.length ? `<div class="gp">Itinerary and info</div>` + rest.join('') : '');
+
+  pane.querySelectorAll('.res').forEach(el =>
+    el.addEventListener('click', () => goTo(hits[+el.dataset.n].go)));
 }
 
 function showPane(p){
   document.querySelectorAll('.pane').forEach(x => x.classList.remove('on'));
   $('#pane-'+p).classList.add('on');
   document.querySelectorAll('nav button').forEach(b => b.classList.toggle('on', b.dataset.p === p));
+  $('header').classList.remove('up');
+  lastY = 0;
   window.scrollTo(0,0);
 }
 
 document.querySelectorAll('nav button').forEach(b =>
   b.addEventListener('click', () => { $('#search').value = ''; showPane(b.dataset.p); }));
 $('#search').addEventListener('input', e => runSearch(e.target.value));
+
+/* ---- header retreats while you read ----
+   The bottom nav deliberately stays put: it is the only way between panes, and
+   hiding it would trade 56px for making the app harder to steer. */
+let lastY = 0;
+addEventListener('scroll', () => {
+  const y = Math.max(0, window.scrollY);
+  const head = $('header');
+  if (document.activeElement === $('#search') || $('#search').value){
+    head.classList.remove('up');
+  } else if (y > 90 && y > lastY + 6){
+    head.classList.add('up');
+  } else if (y < lastY - 6 || y < 60){
+    head.classList.remove('up');
+  }
+  lastY = y;
+}, {passive:true});
 
 function tickClock(){
   const now = new Date();
